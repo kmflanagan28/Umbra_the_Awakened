@@ -1,80 +1,71 @@
-import csv
-import os
 import sys
+import os
+import csv
+import re # Import the regular expressions module
 
 # Add the parent directory to the path to find the 'config' module
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 import config
 
-# A simple cache to avoid reading the file every single time
-_contacts_cache = None
-
-def _load_contacts():
+def find_contact(name_to_find: str):
     """
-    Loads contacts from the CSV file into a cache for faster access.
-    This function is for internal use by the agent.
+    Finds a single contact by name from the contacts.csv file.
+    This version is more robust and checks multiple name fields.
     """
-    global _contacts_cache
-    if _contacts_cache is not None:
-        return _contacts_cache
-
-    contacts = []
     if not os.path.exists(config.CONTACTS_FILE_PATH):
         print(f"⚠️  Contacts file not found at '{config.CONTACTS_FILE_PATH}'.")
-        _contacts_cache = []
-        return []
+        return None
 
     try:
         with open(config.CONTACTS_FILE_PATH, mode='r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
+            contacts = list(reader)
+
+        # print("✅ Contacts loaded successfully.")
+        
+        for contact in contacts:
+            first_name = contact.get('First Name', '').strip()
+            last_name = contact.get('Last Name', '').strip()
+            full_name = f"{first_name} {last_name}".strip()
             
-            # --- DEBUGGING STEP ---
-            # The following line will print the exact column headers from your file.
-            # This helps us see if we are looking for the correct column names.
-            # print(f"\n[DEBUG] Headers found in contacts.csv: {reader.fieldnames}\n")
+            if name_to_find.lower() in full_name.lower():
+                location = contact.get('Address 1 - Formatted', '').strip()
+                return {"name": full_name, "location": location}
 
-            for row in reader:
-                # --- FIX: Use the correct column headers from your specific CSV file ---
-                given_name = row.get('First Name', '') # Changed from 'Given Name'
-                family_name = row.get('Last Name', '')  # Changed from 'Family Name'
-                full_name_from_parts = f"{given_name} {family_name}".strip()
-                
-                # Use the 'Name' column if it's there, otherwise use the one we built.
-                contact_name = row.get('Name') or full_name_from_parts
-
-                # Find the location from Google's various address columns
-                location = row.get('Address 1 - City', '') or row.get('Address 2 - City', '')
-                
-                if contact_name:
-                    contacts.append({
-                        "name": contact_name,
-                        "location": location,
-                        "phone": row.get('Phone 1 - Value'),
-                        "email": row.get('E-mail 1 - Value')
-                    })
-
-        _contacts_cache = contacts
-        print("✅ Contacts loaded successfully.")
-        return contacts
-    except Exception as e:
-        print(f"❌ Error reading contacts file: {e}")
-        _contacts_cache = []
-        return []
-
-def find_contact(name_query: str):
-    """
-    Searches the loaded contacts for a name. This version is more forgiving.
-    Returns the contact's data dictionary if a match is found, otherwise None.
-    """
-    contacts = _load_contacts()
-    if not contacts:
         return None
-    
-    search_name = name_query.lower().strip()
-    
-    for contact in contacts:
-        contact_name = contact.get('name')
-        if contact_name and search_name in contact_name.lower():
-            return contact
-            
-    return None
+
+    except Exception as e:
+        print(f"An error occurred while reading the contacts file: {e}")
+        return None
+
+def check_contacts(location_filter: str):
+    """
+    Searches the entire contacts.csv file for any contacts in a specific location.
+    This version uses a more precise search to avoid partial word matches.
+    """
+    if not os.path.exists(config.CONTACTS_FILE_PATH):
+        return f"Contacts file not found at '{config.CONTACTS_FILE_PATH}'."
+
+    found_contacts = []
+    try:
+        with open(config.CONTACTS_FILE_PATH, mode='r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for contact in reader:
+                location = contact.get('Address 1 - Formatted', '').strip()
+                
+                # --- SMARTER SEARCH LOGIC ---
+                # This uses a regular expression to find the filter as a whole word.
+                # It's case-insensitive and handles word boundaries.
+                if re.search(r'\b' + re.escape(location_filter) + r'\b', location, re.IGNORECASE):
+                    first_name = contact.get('First Name', '').strip()
+                    last_name = contact.get('Last Name', '').strip()
+                    full_name = f"{first_name} {last_name}".strip()
+                    found_contacts.append(f"- {full_name} ({location})")
+        
+        if not found_contacts:
+            return f"No contacts found matching '{location_filter}'."
+
+        return f"Found {len(found_contacts)} contacts matching '{location_filter}':\n" + "\n".join(found_contacts)
+
+    except Exception as e:
+        return f"An error occurred while reading the contacts file: {e}"

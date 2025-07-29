@@ -1,6 +1,6 @@
-import sqlite3
-import os
 import sys
+import os
+import sqlite3
 import random
 
 # Add the parent directory to the path to find other modules
@@ -8,127 +8,147 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 import config
 from agents.knowledge_agent import tavily_search
 
-def _initialize_travel_db():
-    """Ensures the travel database and its tables exist."""
+def _ensure_db_and_table_exist():
+    """Ensures the travel database and all necessary tables exist."""
     conn = sqlite3.connect(config.TRAVEL_DB_PATH)
     cursor = conn.cursor()
     # Create friends table
-    cursor.execute('''
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS friends (
-            id INTEGER PRIMARY KEY,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL UNIQUE,
             location TEXT,
             notes TEXT
         )
-    ''')
+    """)
     # Create points_of_interest table
-    cursor.execute('''
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS points_of_interest (
-            id INTEGER PRIMARY KEY,
-            name TEXT NOT NULL UNIQUE,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
             type TEXT,
             location TEXT,
             notes TEXT
         )
-    ''')
+    """)
     conn.commit()
     conn.close()
 
-# Initialize the DB when the agent is first loaded
-_initialize_travel_db()
-
-# --- Functions to add data ---
 def add_friend(name: str, location: str, notes: str):
-    """Adds a friend to the travel database."""
-    try:
-        conn = sqlite3.connect(config.TRAVEL_DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO friends (name, location, notes) VALUES (?, ?, ?)", (name, location, notes))
-        conn.commit()
-        conn.close()
-        print(f"\n✅ Friend '{name}' added to the database.")
-    except sqlite3.IntegrityError:
-        print(f"\n⚠️  Error: A friend named '{name}' already exists in the database.")
-    except Exception as e:
-        print(f"\n❌ An unexpected error occurred: {e}")
+    """Adds or updates a friend in the travel database."""
+    _ensure_db_and_table_exist()
+    conn = sqlite3.connect(config.TRAVEL_DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO friends (name, location, notes) VALUES (?, ?, ?)
+        ON CONFLICT(name) DO UPDATE SET
+        location=excluded.location,
+        notes=excluded.notes
+    """, (name, location, notes))
+    conn.commit()
+    conn.close()
+    print(f"\n✅ Friend '{name}' added to the database.")
+
+def update_friend_location(name: str, new_location: str):
+    """Updates a specific friend's location in the database."""
+    _ensure_db_and_table_exist()
+    conn = sqlite3.connect(config.TRAVEL_DB_PATH)
+    cursor = conn.cursor()
+    # Use a case-insensitive search to find the friend
+    cursor.execute("UPDATE friends SET location = ? WHERE name LIKE ?", (new_location, f'%{name}%'))
+    
+    if cursor.rowcount == 0:
+        print(f"\nCould not find a friend named '{name}' to update.")
+    else:
+        print(f"\n✅ Updated location for '{name}' to '{new_location}'.")
+        
+    conn.commit()
+    conn.close()
+
+
+def list_friends(location_filter: str = None):
+    """
+    Lists all friends in the database.
+    If a location_filter is provided, it will only list friends in that location.
+    """
+    _ensure_db_and_table_exist()
+    conn = sqlite3.connect(config.TRAVEL_DB_PATH)
+    cursor = conn.cursor()
+    
+    if location_filter:
+        # Search for friends where the location contains the filter string
+        cursor.execute("SELECT name, location, notes FROM friends WHERE location LIKE ?", (f'%{location_filter}%',))
+        title = f"--- Umbra's Friends in {location_filter} ---"
+    else:
+        # Get all friends
+        cursor.execute("SELECT name, location, notes FROM friends")
+        title = "--- Umbra's Friends List ---"
+        
+    results = cursor.fetchall()
+    conn.close()
+
+    if not results:
+        if location_filter:
+            return f"No friends found in {location_filter}."
+        else:
+            return "You haven't added any friends to your travel database yet."
+
+    # Format the results into a readable string
+    formatted_list = f"\n{title}\n"
+    for name, location, notes in results:
+        formatted_list += f"- Name: {name}\n  Location: {location}\n  Notes: {notes}\n\n"
+        
+    return formatted_list.strip()
+
 
 def add_poi(name: str, poi_type: str, location: str, notes: str):
     """Adds a point of interest to the travel database."""
-    try:
-        conn = sqlite3.connect(config.TRAVEL_DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO points_of_interest (name, type, location, notes) VALUES (?, ?, ?, ?)", (name, poi_type, location, notes))
-        conn.commit()
-        conn.close()
-        print(f"\n✅ POI '{name}' added to the database.")
-    except sqlite3.IntegrityError:
-        print(f"\n⚠️  Error: A POI named '{name}' already exists in the database.")
-    except Exception as e:
-        print(f"\n❌ An unexpected error occurred: {e}")
-
-# --- Functions to manage data ---
-def update_friend_location(name: str, new_location: str):
-    """Updates the location for a specific friend in the database."""
+    _ensure_db_and_table_exist()
     conn = sqlite3.connect(config.TRAVEL_DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("SELECT id FROM friends WHERE name LIKE ?", (f'%{name}%',))
-    friend = cursor.fetchone()
-    if friend:
-        cursor.execute("UPDATE friends SET location = ? WHERE id = ?", (new_location, friend[0]))
-        conn.commit()
-        print(f"\n✅ Updated location for '{name}' to '{new_location}'.")
-    else:
-        print(f"\n⚠️  Could not find a friend named '{name}' to update.")
+    cursor.execute("""
+        INSERT INTO points_of_interest (name, type, location, notes) VALUES (?, ?, ?, ?)
+    """, (name, poi_type, location, notes))
+    conn.commit()
     conn.close()
+    print(f"\n✅ POI '{name}' added to the database.")
 
-def list_friends():
-    """Lists all friends currently stored in the database."""
-    conn = sqlite3.connect(config.TRAVEL_DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT name, location, notes FROM friends")
-    all_friends = cursor.fetchall()
-    conn.close()
-    if not all_friends:
-        return "\nYour friends list is currently empty."
-    output = "\n--- Umbra's Friends List ---\n"
-    for friend in all_friends:
-        output += f"- Name: {friend[0]}\n  Location: {friend[1]}\n  Notes: {friend[2]}\n"
-    return output
 
-# --- NEW: Functions to discover opportunities ---
 def find_friend_poi_opportunities():
-    """Finds friends who are located in the same area as a point of interest."""
+    """Finds friends who live in or near a Point of Interest."""
+    _ensure_db_and_table_exist()
     conn = sqlite3.connect(config.TRAVEL_DB_PATH)
     cursor = conn.cursor()
-    # This SQL query joins the two tables on the location field
-    cursor.execute('''
+    # This query joins the two tables on the location column
+    cursor.execute("""
         SELECT f.name, f.location, p.name, p.type
         FROM friends f
-        JOIN points_of_interest p ON f.location = p.location
-    ''')
-    opportunities = cursor.fetchall()
+        JOIN points_of_interest p ON f.location LIKE '%' || p.location || '%'
+    """)
+    results = cursor.fetchall()
     conn.close()
-    if not opportunities:
+
+    if not results:
         return "No friendly opportunities found near your points of interest right now."
+
+    formatted_results = "Found the following opportunities:\n"
+    for friend_name, friend_loc, poi_name, poi_type in results:
+        formatted_results += f"- You could visit your friend **{friend_name}** in **{friend_loc}** and also check out the {poi_type}: **{poi_name}**.\n"
     
-    output = "Found the following opportunities:\n"
-    for op in opportunities:
-        output += f"- You could visit your friend **{op[0]}** in **{op[1]}** and also check out the {op[3]}: **{op[2]}**.\n"
-    return output
+    return formatted_results.strip()
+
 
 def find_concerts():
-    """Searches for concert dates for a random favorite artist."""
+    """Picks a random artist and searches for their tour dates."""
     if not config.FAVORITE_ARTISTS:
-        return "You have not defined any favorite artists in config.py."
+        return "You have not defined any favorite artists in your config file."
     
     artist = random.choice(config.FAVORITE_ARTISTS)
     print(f"   - Searching for tour dates for {artist}...")
-    query = f"upcoming tour dates for {artist} in the US"
+    query = f"upcoming concert tour dates for {artist}"
     
     # Use the knowledge agent's search tool
-    results = tavily_search(query)
+    search_results = tavily_search(query)
     
-    if "No search results found" in results:
-        return f"No upcoming tour dates found for {artist} at this time."
-    
-    return f"Concert Info for {artist}:\n{results}"
+    return f"Concert Info for {artist}:\n{search_results}"
+

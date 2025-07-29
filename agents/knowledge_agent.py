@@ -1,83 +1,76 @@
-import json
-import os
 import sys
+import os
 import requests
+import json
 
 # Add the parent directory to the path to find the 'config' module
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 import config
 
-def get_weather(location: str = None):
-    """
-    This is a 'Tool' function.
-    It gets the current weather for a given location using the OpenWeatherMap API.
-    If no location is provided, it combines the default city and country from the config.
-    """
-    query_location = location
+def get_weather(location=None):
+    """Gets the current weather for a specified location."""
+    if location is None:
+        location = f"{config.HOME_CITY}"
     
-    if query_location is None:
-        # If no location is provided, build a more specific query from the config
-        query_location = f"{config.DEFAULT_CITY},{config.DEFAULT_COUNTRY}"
-
-    # The base URL for the OpenWeatherMap API
+    api_key = config.OPENWEATHER_API_KEY
     base_url = "http://api.openweathermap.org/data/2.5/weather"
-    
-    # Parameters to send with the API request
     params = {
-        "q": query_location,
-        "appid": config.OPENWEATHER_API_KEY,
-        "units": "imperial" # Use 'metric' for Celsius
+        "q": location,
+        "appid": api_key,
+        "units": "imperial" 
     }
-    
     try:
         response = requests.get(base_url, params=params)
-        # Raise an exception for bad status codes (4xx or 5xx)
-        response.raise_for_status() 
+        response.raise_for_status() # Raises an HTTPError for bad responses (4xx or 5xx)
+        data = response.json()
         
-        weather_data = response.json()
+        weather_desc = data['weather'][0]['description']
+        temp = data['main']['temp']
+        city = data['name']
         
-        city_name = weather_data['name']
-        main_weather = weather_data['weather'][0]['main']
-        description = weather_data['weather'][0]['description']
-        temp = weather_data['main']['temp']
-        
-        return f"The weather in {city_name} is {temp}°F with {description}."
-        
-    except requests.exceptions.RequestException as e:
-        # Provide a more user-friendly error message
-        return f"Error fetching weather data. Please check your connection or API key. Details: {e}"
-    except KeyError:
-        return f"Error: Could not parse weather data. The city '{query_location}' might not be found."
+        return f"The weather in {city} is {temp}°F with {weather_desc}."
+
+    except requests.exceptions.HTTPError as http_err:
+        return f"Error fetching weather data: {http_err}"
+    except Exception as e:
+        return f"An unexpected error occurred: {e}"
 
 
-def tavily_search(query: str):
+def tavily_search(*args):
     """
-    This is a 'Tool' function.
-    It performs a web search using the Tavily API to answer a question.
+    Performs a web search using the Tavily API.
+    This version is upgraded to handle multiple arguments from the LLM.
     """
-    if not config.TAVILY_API_KEY:
-        return "Error: Tavily API key is not set in the config file."
+    # Join all arguments into a single query string
+    query = " ".join(args)
+
+    if not query:
+        return "Search query cannot be empty."
+
+    api_key = config.TAVILY_API_KEY
+    url = "https://api.tavily.com/search"
+    payload = {
+        "api_key": api_key,
+        "query": query,
+        "search_depth": "basic",
+        "include_answer": True,
+        "max_results": 5
+    }
+    headers = {"Content-Type": "application/json"}
 
     try:
-        response = requests.post(
-            "https://api.tavily.com/search",
-            json={
-                "api_key": config.TAVILY_API_KEY,
-                "query": query,
-                "search_depth": "basic",
-                "max_results": 3,
-            },
-        )
+        response = requests.post(url, headers=headers, data=json.dumps(payload))
         response.raise_for_status()
+        data = response.json()
         
-        search_results = response.json()
-        
-        # Format the results into a readable string
-        formatted_response = "🔎 Tavily Search Results:\n"
-        for result in search_results.get("results", []):
-            formatted_response += f"- {result['content']}\n"
-            
-        return formatted_response if search_results.get("results") else "No search results found."
+        # Format the results into a clean string
+        if "answer" in data and data["answer"]:
+            return data["answer"]
+        elif "results" in data and data["results"]:
+            results_str = "\n".join([f"- {res['content']}" for res in data['results']])
+            return f"🔎 Tavily Search Results:\n{results_str}"
+        else:
+            return "No search results found."
 
     except requests.exceptions.RequestException as e:
-        return f"Error with Tavily search: {e}"
+        return f"Error performing search: {e}"

@@ -1,29 +1,73 @@
 import sys
-import datetime
 import json
+import datetime
 
 # --- Agent Imports ---
 from agents import (
-    memory_agent, 
-    knowledge_agent, 
-    comms_agent, 
-    travel_agent, 
-    contacts_agent, 
-    inspiration_agent, 
-    llm_agent,
-    logistics_agent
+    memory_agent,
+    knowledge_agent,
+    comms_agent,
+    travel_agent,
+    contacts_agent,
+    inspiration_agent,
+    logistics_agent,
+    llm_agent
 )
 
-# --- Helper Functions for Complex Tools ---
+# --- The Tool Map ---
+# This dictionary maps the tool names the LLM can choose to the actual Python functions.
+tool_map = {
+    "log": lambda args: memory_agent.add_memory(args[0], "Manual Log"),
+    "recall": memory_agent.search_memories,
+    "list-friends": travel_agent.list_friends,
+    "add-friend": travel_agent.add_friend,
+    "update-friend": travel_agent.update_friend_location,
+    "add-poi": travel_agent.add_poi,
+    "discover": lambda args: (
+        travel_agent.find_friend_poi_opportunities(),
+        travel_agent.find_concerts()
+    ),
+    "check-contacts": contacts_agent.check_contacts,
+    "distance": logistics_agent.get_route_info,
+    "weather": knowledge_agent.get_weather,
+    "search": knowledge_agent.tavily_search,
+    "briefing": lambda args: send_daily_briefing(),
+    "conversation": lambda args: print(f"\nUmbra: {' '.join(args)}"),
+    # --- NEW DEBUG TOOL ---
+    "debug": lambda args: print(f"\n[DEBUG] Available tools: {list(tool_map.keys())}")
+}
 
-def _run_briefing():
-    """Helper function to assemble and send the daily briefing."""
-    # ... (this function is unchanged) ...
+def execute_action(decision: dict):
+    """Executes the tool chosen by the LLM."""
+    tool_name = decision.get("tool")
+    args = decision.get("args", [])
+    
+    if tool_name in tool_map:
+        try:
+            result = tool_map[tool_name](args)
+            if result:
+                print(result)
+            return "Action executed successfully."
+        except Exception as e:
+            error_message = f"Error executing tool '{tool_name}': {e}. Check number of arguments."
+            print(error_message)
+            memory_agent.add_memory(error_message, "System Error")
+            return error_message
+    else:
+        not_found_message = f"I'm sorry, I don't have a tool named '{tool_name}' yet, but I'm learning. Please try a different command."
+        print(f"\nUmbra: {not_found_message}")
+        memory_agent.add_memory(f"LLM tried to use non-existent tool: {tool_name}", "System Learning")
+        return not_found_message
+
+
+def send_daily_briefing():
+    """Gathers all information and sends the daily briefing email."""
     print("\n⚙️  Assembling your briefing...")
+    
     daily_quote = inspiration_agent.get_daily_quote()
     weather_report = knowledge_agent.get_weather()
-    memory_insight = memory_agent.get_daily_memory_insight() 
-    
+    memory_insight = memory_agent.get_daily_memory_insight()
+
     subject = f"Umbra's Daily Briefing - {datetime.date.today().strftime('%A, %B %d')}"
     body = (
         f"Good morning.\n\n"
@@ -35,97 +79,59 @@ def _run_briefing():
     )
     print("   - Assembled email body.")
     print("   - Sending email...")
-    return comms_agent.send_email(subject, body)
+    email_status = comms_agent.send_email(subject, body)
+    print(f"\n{email_status}")
 
-
-def _run_discovery():
-    """Helper function to run the discovery tools and format a report."""
-    # ... (this function is unchanged) ...
-    print("\n🔎 Discovering potential opportunities...")
-    friend_ops = travel_agent.find_friend_poi_opportunities()
-    concert_ops = travel_agent.find_concerts()
-    
-    report = (
-        f"\n--- Discovery Report ---\n"
-        f"\n[ Friendly Opportunities ]\n{friend_ops}\n"
-        f"\n[ Concerts & Events ]\n{concert_ops}\n"
-        f"------------------------"
-    )
-    return report
-
-# --- Core Execution Logic ---
-
-def execute_action(action: dict):
-    """Executes the action decided by the LLM by looking up the tool in a map."""
-    tool_name = action.get("tool")
-    args = action.get("args", [])
-
-    print(f"   - LLM decided to use tool: '{tool_name}' with args: {args}")
-
-    # A complete dictionary mapping all tool names to the actual functions
-    tool_map = {
-        "briefing": _run_briefing,
-        "search": knowledge_agent.tavily_search,
-        "log": memory_agent.add_memory,
-        "recall": memory_agent.search_memories,
-        "add-friend": travel_agent.add_friend,
-        "update-friend": travel_agent.update_friend_location,
-        "list-friends": travel_agent.list_friends,
-        "add-poi": travel_agent.add_poi,
-        "discover": _run_discovery,
-        "distance": logistics_agent.get_distance,
-        "weather": knowledge_agent.get_weather,
-        # *** NEW: Add the check-contacts tool ***
-        "check-contacts": contacts_agent.check_contacts, 
-        "conversation": lambda *messages: print(f"\nUmbra: {' '.join(messages)}"),
-        "error": lambda message: print(f"\nError from LLM: {message}")
-    }
-    
-    if tool_name in tool_map:
-        try:
-            result = tool_map[tool_name](*args)
-            if result:
-                print(f"\n{result}")
-        except TypeError as e:
-            print(f"\nError executing tool '{tool_name}': {e}. Check number of arguments.")
-    else:
-        print(f"\nError: LLM chose an unknown tool: '{tool_name}'.")
-
-# --- Main Program Loop ---
 
 def main():
-    """The main function where the program runs."""
-    # Add a new line to the help prompt
-    print("--- Umbra OS v2.2 (Rolodex-Enabled) Activated ---")
-    print("Ask me anything, check your contacts with 'check-contacts [location]', or type 'exit'.")
-    
+    """The main loop for the LLM-powered orchestrator."""
+    memory_agent.setup_database()
+
+    print("--- Umbra OS v2.5 (Intelligent Parsing) Activated ---")
+    print("Ask me anything, or type 'exit' to quit.")
+
     while True:
         try:
-            prompt = input("\nKyle ▶ ")
-
-            if prompt.lower() == "exit":
+            user_prompt = input("\nKyle ▶ ")
+            if user_prompt.lower() == "exit":
                 print("\nDeactivating Umbra. Goodbye.")
                 break
+
+            print("   - Consulting LLM to determine intent...")
+            llm_response = llm_agent.decide_tool(user_prompt)
+            cleaned_response = llm_response.strip()
+
+            tool_decision = None
+            try:
+                # First, assume it MIGHT be JSON and try to parse it
+                potential_json = json.loads(cleaned_response)
+                # If it parses AND has a 'tool' key, treat it as a tool decision
+                if isinstance(potential_json, dict) and 'tool' in potential_json:
+                    tool_decision = potential_json
+                    print(f"   - LLM decided to use tool: '{tool_decision.get('tool')}' with args: {tool_decision.get('args')}")
+                else:
+                    # It parsed to JSON but wasn't a valid tool format (e.g. {"key": "value"}), so it's a conversation
+                    raise json.JSONDecodeError("Not a tool format", cleaned_response, 0)
+            except (json.JSONDecodeError, TypeError):
+                # If it fails parsing or isn't a dictionary, it's a direct conversational response
+                print(f"   - LLM provided a direct conversational response.")
+                tool_decision = {"tool": "conversation", "args": [cleaned_response]}
+
+            # Execute the chosen action
+            execute_action(tool_decision)
             
-            if not prompt:
-                continue
-
-            # 1. Let the LLM decide what to do
-            action_to_take = llm_agent.decide_next_action(prompt)
-
-            # 2. Execute the decided action
-            execute_action(action_to_take)
-
-            # 3. Automatically log the interaction
-            log_entry = f"User Prompt: '{prompt}' | Umbra's Action: {json.dumps(action_to_take)}"
-            memory_agent.add_memory(log_entry)
+            # Log the entire interaction as a memory
+            log_entry = f"User Prompt: '{user_prompt}' | Umbra's Action: {tool_decision}"
+            memory_agent.add_memory(log_entry, "User Interaction")
 
         except KeyboardInterrupt:
             print("\n\nDeactivating Umbra. Goodbye.")
             break
         except Exception as e:
-            print(f"\nAn unexpected critical error occurred: {e}")
+            critical_error = f"A critical error occurred in the main loop: {e}"
+            print(critical_error)
+            memory_agent.add_memory(critical_error, "Critical System Error")
+
 
 if __name__ == "__main__":
     main()
-

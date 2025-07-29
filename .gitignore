@@ -1,0 +1,17 @@
+# Python virtual environment
+umbra-env/
+
+# Python cache files
+__pycache__/
+*.pyc
+
+# Database and token files
+*.db
+token.json
+
+# Configuration file with secrets
+config.py
+
+
+# To keep out secure information
+credentials.json

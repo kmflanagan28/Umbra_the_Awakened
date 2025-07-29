@@ -1,57 +1,81 @@
 import sys
 import os
-import random
+import sqlite3
+import datetime
 
 # Add the parent directory to the path to find other agents
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from agents import knowledge_agent, llm_agent
 import config
 
-def research_and_learn(topic: str):
+def _initialize_learning_log():
+    """Ensures the learning log database and its table exist."""
+    conn = sqlite3.connect(config.LEARNING_LOG_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS learnings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            topic TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            source TEXT 
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+# Initialize the database when the agent is loaded
+_initialize_learning_log()
+
+
+def research_market_trends(item_name: str):
     """
-    This is Umbra's core autonomous research tool.
-    It takes a topic, researches it online, and uses the LLM to synthesize a conclusion.
+    This is an autonomous research tool. It researches the 'sold' listings for
+    an item on eBay, uses the LLM to analyze the data, and logs the findings.
     """
-    print(f"   - Researching topic: {topic}")
+    print(f"   - Researching market trends for: {item_name}")
 
-    # 1. DISCOVER: Find a list of items related to the topic.
-    discover_prompt = f"List the names of 3 top-rated, best-selling {topic} released in the last year."
-    initial_list_str = knowledge_agent.tavily_search(discover_prompt)
+    # 1. DISCOVER: Use the knowledge agent to find raw data
+    discover_prompt = f"Find the 5 most recent 'sold' listings for '{item_name}' on eBay.com. Include the price and date for each."
+    raw_data = knowledge_agent.tavily_search(discover_prompt)
     
-    # Simple parsing of the search result to get a list of items
-    # A more robust version would use the LLM to parse this cleanly
-    items_to_research = [line.strip().replace('- ', '') for line in initial_list_str.split('\n') if line.strip().startswith('- ')]
-    
-    if not items_to_research:
-        return "Could not discover any specific items to research on that topic."
+    if "No search results found" in raw_data:
+        return f"Could not find any recent sold listings for '{item_name}'."
 
-    # 2. INVESTIGATE: For each item, get a summary.
-    print(f"   - Found {len(items_to_research)} items. Investigating each...")
-    research_data = ""
-    for item in items_to_research:
-        print(f"     - Getting summary for: {item}")
-        investigate_prompt = f"Provide a detailed summary of the key ideas in the book '{item}'."
-        summary = knowledge_agent.tavily_search(investigate_prompt)
-        research_data += f"\n\n--- Summary for {item} ---\n{summary}"
-
-    # 3. SYNTHESIZE: Use the LLM to analyze the collected data.
-    print("   - Synthesizing conclusion with LLM...")
+    # 2. SYNTHESIZE: Use the LLM to analyze the raw data
+    print("   - Synthesizing market analysis with LLM...")
     synthesis_prompt = f"""
-    Based on the following research summaries, please act as a world-class analyst.
-    Compare and contrast the key ideas from each book. 
-    Identify the most unique or actionable concept, and explain why.
+    You are a market analyst. Based on the following raw data of recently sold eBay listings,
+    calculate the average sale price and provide a brief summary of the market activity for '{item_name}'.
 
-    Here is the research data:
-    {research_data}
+    RAW DATA:
+    ---
+    {raw_data}
+    ---
     """
     
-    # Use the llm_agent to get the final analysis
-    # We call the 'decide_next_action' but frame the prompt for direct response
-    llm_decision = llm_agent.decide_next_action(synthesis_prompt)
-
+    llm_response = llm_agent.decide_tool(synthesis_prompt)
+    
     # Extract the conversational response from the LLM's decision
-    if llm_decision.get("tool") == "conversation":
-        return " ".join(llm_decision.get("args", ["Could not form a conclusion."]))
+    thought = llm_response.get("thought", "Analysis failed.")
+    decision = llm_response.get("decision")
+    
+    if decision and decision.get("tool") == "conversation":
+        analysis_summary = " ".join(decision.get("args", ["Could not form a conclusion."]))
     else:
-        # If the LLM didn't choose conversation, return the raw data
-        return research_data
+        analysis_summary = f"Analysis was inconclusive. Raw thought: {thought}"
+
+    # 3. LOG: Save the structured findings to the learning log
+    print("   - Saving analysis to the Learning Log...")
+    conn = sqlite3.connect(config.LEARNING_LOG_PATH)
+    cursor = conn.cursor()
+    timestamp = datetime.datetime.now().isoformat()
+    cursor.execute(
+        "INSERT INTO learnings (timestamp, topic, summary, source) VALUES (?, ?, ?, ?)",
+        (timestamp, item_name, analysis_summary, "eBay Sold Listings")
+    )
+    conn.commit()
+    conn.close()
+    
+    return f"Market research for '{item_name}' complete and logged."
+
